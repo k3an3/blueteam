@@ -20,6 +20,7 @@ class Host:
         self.dpkg = {}
         self.pid = os.getpid()
         self._tasks = [self.parse_sudo, self.parse_cron]
+        self.uidmap = {}
         if debsums:
             self._tasks.append(self.run_debsums)
         self.q = Queue()
@@ -64,7 +65,7 @@ class Host:
             print("{:7}{:6}{:6} {:3} {:5}{:30} ".format(p['username'][:7], p['pid'],
                                                         p['ppid'], colorful.yellow(len(p['connections'])),
                                                         color('dpkg:' if not self._is_kthread(p) else ''),
-                                                        p['pkg']), end='')
+                                                        p['pkg'] or ''), end='')
         else:
             print(pid, ">???")
 
@@ -76,6 +77,7 @@ class Host:
               colorful.white_on_blue('(blueteam)') if self._is_parent(p['pid']) else '')
 
     def _is_parent(self, pid: int):
+        pid = int(pid)
         if not pid:
             return False
         if pid == self.pid:
@@ -103,12 +105,17 @@ class Host:
         self._print_tree(child, tree, indent + "  ")
 
     def get_package_name(self, path: str):
-        try:
-            p = self.dpkg[path]
-        except KeyError:
-            p = self.backend.run_command('dpkg -S {}'.format(path)).split(":")[0]
-            self.dpkg[path] = p
-        return p
+        if path:
+            try:
+                p = self.dpkg[path]
+            except KeyError:
+                p = self.backend.run_command('dpkg -S {}'.format(path))
+                try:
+                    p = p.split(":")[0]
+                except AttributeError:
+                    p = p[0].split(":")[0]
+                self.dpkg[path] = p
+            return p
 
     def run_all(self):
         for task in self._tasks:
@@ -125,10 +132,7 @@ class Host:
     def pstree(self):
         tree = collections.defaultdict(list)
         for pid, p in self.processes.items():
-            try:
-                tree[p['ppid']].append(pid)
-            except (psutil.NoSuchProcess, psutil.ZombieProcess):
-                pass
+            tree[p['ppid']].append(pid)
         # on systems supporting PID 0, PID 0's parent is usually 0
         if 0 in tree and 0 in tree[0]:
             tree[0].remove(0)

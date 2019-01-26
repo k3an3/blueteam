@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
 from glob import glob
-from os.path import expanduser
 from subprocess import run
 
 import paramiko
@@ -27,15 +26,40 @@ class Backend(ABC):
 
 
 class SSHBackend(Backend):
-    def get_processes(self):
-        pass
-
     def __init__(self, host: str, port: int = 22, user: str = 'root', password: str = None,
-                 keyfile: str = expanduser('~/.ssh/id_rsa')):
+                 keyfile: str = None):
         self.host = host
         self.ssh = paramiko.SSHClient()
         self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         self.ssh.connect(host, port, user, password, key_filename=keyfile)
+
+    def get_processes(self):
+        for p in self.glob('/proc/*'):
+            try:
+                p = int(p.rstrip())
+            except ValueError:
+                continue
+            try:
+                stat = self.read_file('/proc/{}/stat'.format(p))[0].split()
+            except IndexError:
+                continue
+            try:
+                exe = self.run_command('readlink /proc/{}/exe'.format(p))[0].rstrip()
+            except IndexError:
+                exe = ''
+            data = {'pid': p, 'name': stat[1][1:-1], 'ppid': stat[3],
+                    'exe': exe,
+                    'cmdline': self.read_file('/proc/{}/cmdline'.format(p))[0].rstrip()[:-1],
+                    'connections': '',
+                    'username': self._user_from_id(
+                        self.run_command('grep Uid /proc/{}/status'.format(p))[0].split()[1])}
+            yield p, data
+
+    def _user_from_id(self, id: int):
+        for line in self.run_command('getent passwd'):
+            line = line.split(":")
+            if int(line[2]) == int(id):
+                return line[0]
 
     def remote_python(self, command: str):
         python_command = 'python -c "{}"'.format(command.replace('"', '\\"'))
