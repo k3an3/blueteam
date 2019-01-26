@@ -4,6 +4,7 @@ from os.path import expanduser
 from subprocess import run
 
 import paramiko
+import psutil
 from braceexpand import braceexpand
 
 
@@ -20,8 +21,15 @@ class Backend(ABC):
     def glob(self, glob: str):
         pass
 
+    @abstractmethod
+    def get_processes(self):
+        pass
+
 
 class SSHBackend(Backend):
+    def get_processes(self):
+        pass
+
     def __init__(self, host: str, port: int = 22, user: str = 'root', password: str = None,
                  keyfile: str = expanduser('~/.ssh/id_rsa')):
         self.host = host
@@ -45,6 +53,12 @@ class SSHBackend(Backend):
 
 
 class LocalBackend(Backend):
+    def get_processes(self):
+        for proc in psutil.process_iter(attrs=['pid', 'ppid', 'name', 'exe',
+                                               'cmdline', 'terminal', 'connections',
+                                               'username', 'create_time']):
+            yield proc.pid, proc.info
+
     def read_file(self, path: str):
         with open(path) as f:
             return f.readlines()

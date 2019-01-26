@@ -15,4 +15,9 @@ setup(
         'paramiko',
         'psutil'
     ],
+    entry_points={
+        'console_scripts': [
+            'blueteam=blueteam:cli',
+        ]
+    },
 )

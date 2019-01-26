@@ -1,16 +1,17 @@
 import collections
 import os
 import sys
+from multiprocessing import Queue
 from typing import List
 
 import colorful
 import psutil as psutil
 
-from blueteam.backends import Backend, LocalBackend
+from blueteam.backends import Backend
 
 
 class Host:
-    def __init__(self, backend: Backend):
+    def __init__(self, backend: Backend, debsums: bool = True):
         self.backend = backend
         self.sudo = []
         self.cron = []
@@ -18,6 +19,10 @@ class Host:
         self.processes = {}
         self.dpkg = {}
         self.pid = os.getpid()
+        self._tasks = [self.parse_sudo, self.parse_cron]
+        if debsums:
+            self._tasks.append(self.run_debsums)
+        self.q = Queue()
 
     def combine_files(self, *patterns: List[str]):
         for p in patterns:
@@ -39,16 +44,14 @@ class Host:
             self.cron.append(line)
 
     def run_debsums(self):
-        for line in self.backend.run('debsums -ac'):
-            self.debsums.append(line)
+        for line in self.backend.run_command('debsums -ac').split('\n'):
+            self.debsums.append("{} ({})".format(line, colorful.cyan(self.get_package_name(line).rstrip())))
 
     def get_processes(self):
-        for proc in psutil.process_iter(attrs=['pid', 'ppid', 'name', 'exe',
-                                               'cmdline', 'terminal', 'connections',
-                                               'username', 'create_time']):
-            pkg = self.get_package_name(proc.exe())
-            self.processes[proc.pid] = {**proc.info, 'pkg': pkg,
-                                        'verify': proc.exe not in self.debsums}
+        for pid, proc in self.backend.get_processes():
+            pkg = self.get_package_name(proc['exe'])
+            self.processes[pid] = {**proc, 'pkg': pkg,
+                                   'verify': proc['exe'] not in self.debsums}
 
     @staticmethod
     def _is_kthread(p):
@@ -107,6 +110,17 @@ class Host:
             self.dpkg[path] = p
         return p
 
+    def run_all(self):
+        for task in self._tasks:
+            print("Running", task.__name__)
+            task()
+        print(colorful.black_on_white('SUDO FILES ' + 69 * '='))
+        for line in self.sudo:
+            print(line)
+        print(colorful.black_on_white('CRON FILES ' + 69 * '='))
+        for line in self.cron:
+            print(line)
+
     # Stolen from psutil
     def pstree(self):
         tree = collections.defaultdict(list)
@@ -119,17 +133,3 @@ class Host:
         if 0 in tree and 0 in tree[0]:
             tree[0].remove(0)
         self._print_tree(min(tree), tree)
-
-
-if __name__ == '__main__':
-    b = LocalBackend()
-    h = Host(b)
-    # h.parse_sudo()
-    # h.parse_cron()
-    for l in h.sudo:
-        print(l)
-    for l in h.cron:
-        print(l)
-    h.get_processes()
-    # h.print_pstree()
-    h.pstree()
