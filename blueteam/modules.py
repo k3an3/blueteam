@@ -1,5 +1,5 @@
 import collections
-import subprocess
+import os
 import sys
 from typing import List
 
@@ -17,6 +17,7 @@ class Host:
         self.debsums = []
         self.processes = {}
         self.dpkg = {}
+        self.pid = os.getpid()
 
     def combine_files(self, *patterns: List[str]):
         for p in patterns:
@@ -45,20 +46,38 @@ class Host:
         for proc in psutil.process_iter(attrs=['pid', 'ppid', 'name', 'exe',
                                                'cmdline', 'terminal', 'connections',
                                                'username', 'create_time']):
-            self.processes[proc.pid] = proc.info
+            pkg = self.get_package_name(proc.exe())
+            self.processes[proc.pid] = {**proc.info, 'pkg': pkg,
+                                        'verify': proc.exe not in self.debsums}
+
+    @staticmethod
+    def _is_kthread(p):
+        return 2 in (p['pid'], p['ppid'])
 
     def _print_process(self, pid: int):
         p = self.processes.get(pid)
+        color = colorful.red if not p['pkg'] and not self._is_kthread(p) else colorful.green
         if p:
-            print("{:7}{:6}{:6} ".format(p['username'][:7], p['pid'],
-                                            p['ppid']), end='')
+            print("{:7}{:6}{:6} {:3} {:5}{:30} ".format(p['username'][:7], p['pid'],
+                                                        p['ppid'], colorful.yellow(len(p['connections'])),
+                                                        color('dpkg:' if not self._is_kthread(p) else ''),
+                                                        p['pkg']), end='')
         else:
             print(pid, ">???")
 
     def _print_cmdline(self, p):
         cmdline = ' '.join(p['cmdline'])
         print(cmdline[:50] if p['cmdline'] else p['name'],
-              '...' if len(cmdline) > 50 else '', "'" + p['exe'])
+              '...' if len(cmdline) > 50 else '',
+              colorful.white(p['exe']),
+              colorful.white_on_blue('(blueteam)') if self._is_parent(p['pid']) else '')
+
+    def _is_parent(self, pid: int):
+        if not pid:
+            return False
+        if pid == self.pid:
+            return True
+        return self._is_parent(self.processes[pid]['ppid'])
 
     # Stolen from psutil
     def _print_tree(self, parent, tree, indent=''):
@@ -80,12 +99,12 @@ class Host:
         sys.stdout.write(indent + "\\_ ")
         self._print_tree(child, tree, indent + "  ")
 
-    def get_package_name(self, pkg: str):
+    def get_package_name(self, path: str):
         try:
-            p = self.dpkg[pkg]
+            p = self.dpkg[path]
         except KeyError:
-            p = self.backend.run_command('dpkg -S {}'.format(pkg))[0].rstrip()
-            self.dpkg[pkg] = p
+            p = self.backend.run_command('dpkg -S {}'.format(path)).split(":")[0]
+            self.dpkg[path] = p
         return p
 
     # Stolen from psutil
