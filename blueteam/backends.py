@@ -1,5 +1,8 @@
 from abc import ABC, abstractmethod
+from concurrent.futures import as_completed
+from concurrent.futures.thread import ThreadPoolExecutor
 from glob import glob
+from os import cpu_count
 from subprocess import run
 
 import paramiko
@@ -34,28 +37,23 @@ class SSHBackend(Backend):
         self.ssh.connect(host, port, user, password, key_filename=keyfile)
 
     def get_processes(self):
-        for p in self.glob('/proc/*'):
+        results = []
+        with ThreadPoolExecutor(max_workers=1 or 2 * cpu_count() + 1) as executor:
+            for p in self.glob('/proc/'):
+                p = p.split('/')[-1]
+                try:
+                    p = int(p)
+                except ValueError:
+                    continue
+                results.append(executor.submit(_get_process, self.ssh, p))
+        for res in as_completed(results):
             try:
-                p = int(p.rstrip())
-            except ValueError:
+                r = res.result()[1]
+            except Exception as e:
                 continue
-            try:
-                stat = self.read_file('/proc/{}/stat'.format(p))[0].split()
-            except IndexError:
-                continue
-            try:
-                exe = self.run_command('readlink /proc/{}/exe'.format(p))[0].rstrip()
-            except IndexError:
-                exe = ''
-            data = {'pid': p, 'name': stat[1][1:-1], 'ppid': stat[3],
-                    'exe': exe,
-                    'cmdline': self.read_file('/proc/{}/cmdline'.format(p))[0].rstrip()[:-1],
-                    'connections': '',
-                    'username': self._user_from_id(
-                        self.run_command('grep Uid /proc/{}/status'.format(p))[0].split()[1])}
-            yield p, data
+            yield r['pid'], r
 
-    def _user_from_id(self, id: int):
+    def user_from_id(self, id: int):
         for line in self.run_command('getent passwd'):
             line = line.split(":")
             if int(line[2]) == int(id):
@@ -70,7 +68,10 @@ class SSHBackend(Backend):
 
     def run_command(self, command: str):
         _, stdout, _ = self.ssh.exec_command(command)
-        return stdout.readlines()
+        res = []
+        for line in stdout.readlines():
+            res.append(line.rstrip())
+        return res
 
     def read_file(self, path: str):
         return self.remote_python('print open("{}").read()'.format(path))
@@ -84,8 +85,11 @@ class LocalBackend(Backend):
             yield proc.pid, proc.info
 
     def read_file(self, path: str):
+        result = []
         with open(path) as f:
-            return f.readlines()
+            for line in f.readlines():
+                result.append(line.rstrip())
+        return result
 
     def glob(self, path: str):
         result = []
@@ -94,4 +98,30 @@ class LocalBackend(Backend):
         return result
 
     def run_command(self, command: str):
-        return run(command, shell=True, capture_output=True).stdout.decode()
+        return run(command, shell=True, capture_output=True).stdout.decode().split('\n')
+
+
+class NullSSHBackend(SSHBackend):
+    def __init__(self, ssh):
+        self.ssh = ssh
+
+
+def _get_process(ssh, p: int):
+    backend = NullSSHBackend(ssh)
+    try:
+        stat = backend.read_file('/proc/{}/stat'.format(p))[0]
+    except IndexError:
+        return
+    try:
+        exe = backend.run_command('readlink /proc/{}/exe'.format(p))[0].rstrip()
+    except IndexError:
+        exe = ''
+    name = stat.split('(')[1].split(')')[0]
+    ppid = int(stat.split(')')[1].split()[1])
+    data = {'pid': p, 'name': name, 'ppid': ppid,
+            'exe': exe,
+            'cmdline': backend.read_file('/proc/{}/cmdline'.format(p))[0],
+            'connections': '',
+            'username': backend.user_from_id(
+                backend.run_command('grep Uid /proc/{}/status'.format(p))[0].split()[1])}
+    return p, data

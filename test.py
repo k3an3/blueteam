@@ -1,12 +1,18 @@
-from blueteam.backends import SSHBackend
+from blueteam.backends import SSHBackend, LocalBackend
 from blueteam.modules import Host
 
-b = SSHBackend(hosts=['www.team40.isucdc.com',
-                      'db1.team40.isucdc.com',
-                      'db2.team40.isucdc.com',
-                      'db3.team40.isucdc.com',
-                      'db4.team40.isucdc.com',
-                      'db5.team40.isucdc.com'], keyfile=None)
+sb = SSHBackend(host='www.team40.isucdc.com')
+lb = LocalBackend()
+lh = Host(lb)
+sh = Host(sb)
+
+command = 'ls'
+print(sb.run_command(command))
+print(lb.run_command(command))
+print(sb.read_file('/etc/hosts'))
+print(lb.read_file('/etc/hosts'))
+print(sb.glob('/tmp'))
+print(lb.glob('/tmp'))
 """
 for host, output in b.run_command('whoami'):
     print("[{}] {}".format(host, output))

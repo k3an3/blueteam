@@ -1,29 +1,37 @@
 import collections
 import os
+import re
 import sys
 from multiprocessing import Queue
 from typing import List
 
 import colorful
-import psutil as psutil
 
 from blueteam.backends import Backend
 
 
 class Host:
-    def __init__(self, backend: Backend, debsums: bool = True):
+    def __init__(self, backend: Backend, debsums: bool = True, pkg: bool = True, kthreads: bool = True,
+                 q: Queue = None):
         self.backend = backend
         self.sudo = []
         self.cron = []
         self.debsums = []
+        self.users = []
         self.processes = {}
         self.dpkg = {}
         self.pid = os.getpid()
-        self._tasks = [self.parse_sudo, self.parse_cron]
+        self._tasks = [self.parse_sudo, self.parse_cron, self.get_login_users, self.get_processes]
         self.uidmap = {}
         if debsums:
             self._tasks.append(self.run_debsums)
-        self.q = Queue()
+        self._tasks.pop()
+        self.q = q
+        self.pkg = pkg
+        self.kthreads = kthreads
+
+    def __str__(self):
+        return self.backend.host
 
     def combine_files(self, *patterns: List[str]):
         for p in patterns:
@@ -50,7 +58,7 @@ class Host:
 
     def get_processes(self):
         for pid, proc in self.backend.get_processes():
-            pkg = self.get_package_name(proc['exe'])
+            pkg = self.get_package_name(proc['exe']) if self.pkg else ''
             self.processes[pid] = {**proc, 'pkg': pkg,
                                    'verify': proc['exe'] not in self.debsums}
 
@@ -61,19 +69,23 @@ class Host:
     def _print_process(self, pid: int):
         p = self.processes.get(pid)
         color = colorful.red if not p['pkg'] and not self._is_kthread(p) else colorful.green
-        if p:
-            print("{:7}{:6}{:6} {:3} {:5}{:30} ".format(p['username'][:7], p['pid'],
-                                                        p['ppid'], colorful.yellow(len(p['connections'])),
-                                                        color('dpkg:' if not self._is_kthread(p) else ''),
+        if p and (self.kthreads or not self._is_kthread(p)):
+            print("{:7}{:6}{:6} {:3} {:5}{:30} ".format(p['username'][:8] + ('+' if len(p['username']) > 8 else ''),
+                                                        p['pid'], p['ppid'],
+                                                        colorful.yellow(str(len(p['connections']))),
+                                                        color('dpkg:' if self.pkg and not self._is_kthread(p) else ''),
                                                         p['pkg'] or ''), end='')
         else:
             print(pid, ">???")
 
     def _print_cmdline(self, p):
-        cmdline = ' '.join(p['cmdline'])
+        cmdline = p['cmdline']
+        if type(cmdline) == List:
+            cmdline = ' '.join(p['cmdline'])
         print(cmdline[:50] if p['cmdline'] else p['name'],
               '...' if len(cmdline) > 50 else '',
-              colorful.white(p['exe']),
+              colorful.white(p['exe']) if p['exe'] else colorful.white_on_red('(missing)') if not self._is_kthread(
+                  p) else '',
               colorful.white_on_blue('(blueteam)') if self._is_parent(p['pid']) else '')
 
     def _is_parent(self, pid: int):
@@ -86,6 +98,7 @@ class Host:
 
     # Stolen from psutil
     def _print_tree(self, parent, tree, indent=''):
+        parent = int(parent)
         try:
             p = self.processes[parent]
         except KeyError:
@@ -104,6 +117,19 @@ class Host:
         sys.stdout.write(indent + "\\_ ")
         self._print_tree(child, tree, indent + "  ")
 
+    def get_login_users(self):
+        passwd = self.backend.read_file('/etc/passwd')
+        shadow = self.backend.read_file('/etc/shadow')
+        for i, line in enumerate(passwd):
+            if line:
+                if not line.startswith('root') and re.match(r'^[\w-]+:.:(0:\d+|\d+:0):.*$', line):
+                    self.users.append(line)
+                elif not shadow[i].split(":")[1] in ('*', '!', '!!'):
+                    user = line.split(':')[0]
+                    h = shadow[i].split(":")[1]
+                    rest = ':'.join(line.split(":")[2:])
+                    self.users.append("{}:{}:{}".format(user, h, rest))
+
     def get_package_name(self, path: str):
         if path:
             try:
@@ -121,18 +147,15 @@ class Host:
         for task in self._tasks:
             print("Running", task.__name__)
             task()
-        print(colorful.black_on_white('SUDO FILES ' + 69 * '='))
-        for line in self.sudo:
-            print(line)
-        print(colorful.black_on_white('CRON FILES ' + 69 * '='))
-        for line in self.cron:
-            print(line)
 
     # Stolen from psutil
     def pstree(self):
         tree = collections.defaultdict(list)
         for pid, p in self.processes.items():
-            tree[p['ppid']].append(pid)
+            try:
+                tree[int(p['ppid'])].append(pid)
+            except ValueError:
+                pass
         # on systems supporting PID 0, PID 0's parent is usually 0
         if 0 in tree and 0 in tree[0]:
             tree[0].remove(0)
