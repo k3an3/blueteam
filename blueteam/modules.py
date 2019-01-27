@@ -70,7 +70,7 @@ class Host:
     def _print_process(self, pid: int):
         p = self.processes.get(pid)
         color = colorful.red if not p['pkg'] and not self._is_kthread(p) else colorful.green
-        if p and (self.kthreads or not self._is_kthread(p)):
+        if p:
             print("{:9}{:6}{:6} {:4} {:5}{:30} ".format((p['username'] or 'unk')[:8] + ('+' if len(p['username'] or 'unk') > 8 else ''),
                                                         p['pid'], p['ppid'],
                                                         str(colorful.yellow(int(len(p['connections'])))),
@@ -107,6 +107,8 @@ class Host:
         else:
             self._print_cmdline(p)
         if parent not in tree:
+            return
+        if parent == 2:
             return
         children = tree[parent][:-1]
         for child in children:
