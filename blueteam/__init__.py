@@ -35,6 +35,7 @@ def handle_run(host: str, args):
 
 
 def handle_results(host: Host):
+    print(colorful.white_on_green("RESULTS FOR " + str(host)))
     if host.sudo:
         print(colorful.white_on_blue("SUDO FOR " + str(host)))
         for s in host.sudo:
@@ -85,7 +86,6 @@ def cli():
                 hosts.append(p)
             for r in hosts:
                 r.wait()
-                print(colorful.white_on_green("RESULTS FOR " + host))
                 handle_results(r.get())
     else:
         if os.getuid():
