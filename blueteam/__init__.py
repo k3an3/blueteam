@@ -25,7 +25,7 @@ def get_version():
 def handle_run(host: str, args):
     r = re.split(r'((\w+)@)?([.\w]+)(:(\d+))?', host)
     b = SSHBackend(host=r[3], user=r[2], port=r[5] or 22, keyfile=args.keyfile)
-    h = Host(b, debsums=not args.skip_debsums, pkg=not args.no_pkg, kthreads=not args.no_kthread)
+    h = Host(b, cron=not args.no_cron, debsums=not args.skip_debsums, pkg=not args.no_pkg, kthreads=not args.no_kthread)
     if args.ps:
         h.get_processes()
     else:
@@ -36,23 +36,23 @@ def handle_run(host: str, args):
 
 def handle_results(host: Host):
     if host.sudo:
-        print(colorful.white_on_blue("SUDO FOR"), host)
+        print(colorful.white_on_blue("SUDO FOR " + str(host)))
         for s in host.sudo:
             print(s)
     if host.cron:
-        print(colorful.white_on_blue("CRON FOR"), host)
+        print(colorful.white_on_blue("CRON FOR " + str(host)))
         for c in host.cron:
             print(c)
     if host.debsums:
-        print(colorful.white_on_blue("DEBSUMS FOR"), host)
+        print(colorful.white_on_blue("DEBSUMS FOR " + str(host)))
         for d in host.debsums:
             print(d)
     if host.users:
-        print(colorful.white_on_blue("LOGIN USERS FOR"), host)
+        print(colorful.white_on_blue("LOGIN USERS FOR " + str(host)))
         for user in host.users:
             print(colorful.red(user))
     if host.processes:
-        print(colorful.white_on_blue("PSTREE FOR"), host)
+        print(colorful.white_on_blue("PSTREE FOR " + str(host)))
         host.pstree()
 
 
@@ -62,6 +62,7 @@ def cli():
                                                                                                "Helpful if debsums not "
                                                                                                "installed or takes "
                                                                                                "too long.")
+    parser.add_argument('-n', '--no-cron', dest='no_cron', action='store_true', help="Don't print cron.")
     parser.add_argument('-c', '--no-pkg', dest='no_pkg', action='store_true', help="Don't match processes to "
                                                                                    "packages. Quicker.")
     parser.add_argument('-k', '--no-kthread', dest='no_kthread', action='store_true', help="Don't print kthreads in "

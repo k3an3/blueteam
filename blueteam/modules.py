@@ -11,7 +11,7 @@ from blueteam.backends import Backend
 
 
 class Host:
-    def __init__(self, backend: Backend, debsums: bool = True, pkg: bool = True, kthreads: bool = True,
+    def __init__(self, backend: Backend, cron: bool = True, debsums: bool = True, pkg: bool = True, kthreads: bool = True,
                  q: Queue = None):
         self.backend = backend
         self.sudo = []
@@ -21,10 +21,12 @@ class Host:
         self.processes = {}
         self.dpkg = {}
         self.pid = os.getpid()
-        self._tasks = [self.parse_sudo, self.parse_cron, self.get_login_users, self.get_processes]
+        self._tasks = [self.parse_sudo, self.get_login_users, self.get_processes]
         self.uidmap = {}
         if debsums:
             self._tasks.append(self.run_debsums)
+        if cron:
+            self._tasks.append(self.parse_cron)
         self.q = q
         self.pkg = pkg
         self.kthreads = kthreads
@@ -69,7 +71,7 @@ class Host:
         p = self.processes.get(pid)
         color = colorful.red if not p['pkg'] and not self._is_kthread(p) else colorful.green
         if p and (self.kthreads or not self._is_kthread(p)):
-            print("{:9}{:6}{:6} {:4} {:5}{:30} ".format(p['username'][:8] + ('+' if len(p['username']) > 8 else ''),
+            print("{:9}{:6}{:6} {:4} {:5}{:30} ".format((p['username'] or 'unk')[:8] + ('+' if len(p['username'] or 'unk') > 8 else ''),
                                                         p['pid'], p['ppid'],
                                                         str(colorful.yellow(int(len(p['connections'])))),
                                                         str(color('dpkg:' if self.pkg and not self._is_kthread(p) else '')),
@@ -145,8 +147,9 @@ class Host:
 
     def run_all(self):
         for task in self._tasks:
-            print(colorful.white_on_black(self + " running " + task.__name__))
+            print(colorful.white_on_black(str(self) + " running " + task.__name__))
             task()
+        print(colorful.green_on_black(str(self) + " is done."))
 
     # Stolen from psutil
     def pstree(self):

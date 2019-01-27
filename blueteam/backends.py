@@ -38,7 +38,7 @@ class SSHBackend(Backend):
 
     def get_processes(self):
         results = []
-        with ThreadPoolExecutor(max_workers=1 or 2 * cpu_count() + 1) as executor:
+        with ThreadPoolExecutor(max_workers=cpu_count() + 1) as executor:
             for p in self.glob('/proc/'):
                 p = p.split('/')[-1]
                 try:
