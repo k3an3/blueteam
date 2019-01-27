@@ -25,7 +25,6 @@ class Host:
         self.uidmap = {}
         if debsums:
             self._tasks.append(self.run_debsums)
-        self._tasks.pop()
         self.q = q
         self.pkg = pkg
         self.kthreads = kthreads
@@ -46,7 +45,7 @@ class Host:
             if line.startswith("Defaults"):
                 self.sudo.append(line)
             else:
-                self.sudo.append(colorful.yellow(line))
+                self.sudo.append(str(colorful.yellow(line)))
 
     def parse_cron(self):
         for line in self.combine_files('/etc/cron{tab,.*/*}', '/var/spool/cron/crontabs/*'):
@@ -54,7 +53,7 @@ class Host:
 
     def run_debsums(self):
         for line in self.backend.run_command('debsums -ac').split('\n'):
-            self.debsums.append("{} ({})".format(line, colorful.cyan(self.get_package_name(line).rstrip())))
+            self.debsums.append("{} ({})".format(line, str(colorful.cyan(self.get_package_name(line).rstrip()))))
 
     def get_processes(self):
         for pid, proc in self.backend.get_processes():
@@ -70,17 +69,17 @@ class Host:
         p = self.processes.get(pid)
         color = colorful.red if not p['pkg'] and not self._is_kthread(p) else colorful.green
         if p and (self.kthreads or not self._is_kthread(p)):
-            print("{:7}{:6}{:6} {:3} {:5}{:30} ".format(p['username'][:8] + ('+' if len(p['username']) > 8 else ''),
+            print("{:9}{:6}{:6} {:4} {:5}{:30} ".format(p['username'][:8] + ('+' if len(p['username']) > 8 else ''),
                                                         p['pid'], p['ppid'],
-                                                        colorful.yellow(str(len(p['connections']))),
-                                                        color('dpkg:' if self.pkg and not self._is_kthread(p) else ''),
+                                                        str(colorful.yellow(int(len(p['connections'])))),
+                                                        str(color('dpkg:' if self.pkg and not self._is_kthread(p) else '')),
                                                         p['pkg'] or ''), end='')
         else:
             print(pid, ">???")
 
     def _print_cmdline(self, p):
         cmdline = p['cmdline']
-        if type(cmdline) == List:
+        if type(cmdline) == list:
             cmdline = ' '.join(p['cmdline'])
         print(cmdline[:50] if p['cmdline'] else p['name'],
               '...' if len(cmdline) > 50 else '',
@@ -136,16 +135,17 @@ class Host:
                 p = self.dpkg[path]
             except KeyError:
                 p = self.backend.run_command('dpkg -S {}'.format(path))
-                try:
-                    p = p.split(":")[0]
-                except AttributeError:
-                    p = p[0].split(":")[0]
-                self.dpkg[path] = p
-            return p
+                if p:
+                    try:
+                        p = p.split(":")[0]
+                    except AttributeError:
+                        p = p[0].split(":")[0]
+                    self.dpkg[path] = p
+                    return p
 
     def run_all(self):
         for task in self._tasks:
-            print("Running", task.__name__)
+            print(colorful.white_on_black(self + " running " + task.__name__))
             task()
 
     # Stolen from psutil

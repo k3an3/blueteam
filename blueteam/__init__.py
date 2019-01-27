@@ -84,7 +84,7 @@ def cli():
                 hosts.append(p)
             for r in hosts:
                 r.wait()
-                print(colorful.green_on_white("RESULTS FOR " + host))
+                print(colorful.white_on_green("RESULTS FOR " + host))
                 handle_results(r.get())
     else:
         if os.getuid():
