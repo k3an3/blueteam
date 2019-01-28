@@ -85,8 +85,7 @@ class Host:
             cmdline = ' '.join(p['cmdline'])
         print(cmdline[:50] if p['cmdline'] else p['name']
               + '...' if len(cmdline) > 50 else '',
-              colorful.white(p['exe']) if p['exe'] else colorful.white_on_red('(missing)') if not self._is_kthread(
-                  p) else '',
+              "(" + (colorful.white(p['exe']) if p['exe'] else colorful.white_on_red('missing')) + ")" if not self._is_kthread(p) else '',
               colorful.white_on_blue('(blueteam)') if self._is_parent(p['pid']) else '')
 
     def _is_parent(self, pid: int):
