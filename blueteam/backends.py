@@ -118,9 +118,10 @@ def _get_process(ssh, p: int):
         exe = ''
     name = stat.split('(')[1].split(')')[0]
     ppid = int(stat.split(')')[1].split()[1])
+    cmdline = backend.read_file('/proc/{}/cmdline'.format(p))[0].replace('\x00', ' ')
     data = {'pid': p, 'name': name, 'ppid': ppid,
             'exe': exe,
-            'cmdline': backend.read_file('/proc/{}/cmdline'.format(p))[0],
+            'cmdline': cmdline,
             'connections': '',
             'username': backend.user_from_id(
                 backend.run_command('grep Uid /proc/{}/status'.format(p))[0].split()[1])}
