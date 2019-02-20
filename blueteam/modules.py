@@ -11,22 +11,26 @@ from blueteam.backends import Backend
 
 
 class Host:
-    def __init__(self, backend: Backend, cron: bool = True, debsums: bool = True, pkg: bool = True, kthreads: bool = True,
+    def __init__(self, backend: Backend, cron: bool = True, debsums: bool = True, pkg: bool = True,
+                 kthreads: bool = True,
                  q: Queue = None):
         self.backend = backend
         self.sudo = []
         self.cron = []
+        self.files = set()
         self.debsums = []
         self.users = []
         self.processes = {}
         self.dpkg = {}
-        self.pid = os.getpid()
+        self.pid = self.backend.getpid()
         self._tasks = [self.parse_sudo, self.get_login_users, self.get_processes]
         self.uidmap = {}
         if debsums:
             self._tasks.append(self.run_debsums)
         if cron:
             self._tasks.append(self.parse_cron)
+        if pkg:
+            self._tasks.insert(0, self.get_packages)
         self.q = q
         self.pkg = pkg
         self.kthreads = kthreads
@@ -50,12 +54,25 @@ class Host:
                 self.sudo.append(str(colorful.yellow(line)))
 
     def parse_cron(self):
-        for line in self.combine_files('/etc/cron{tab,.*/*}', '/var/spool/cron/crontabs/*'):
-            self.cron.append(line)
+        for f in self.backend.glob('/etc/cron{tab,.*/*}') + self.backend.glob('/var/spool/cron/crontabs/*'):
+            if self.debsums and f in self.debsums or not self.debsums:
+                for line in self.backend.read_file(f):
+                    self.cron.append(line)
 
     def run_debsums(self):
-        for line in self.backend.run_command('debsums -ac').split('\n'):
-            self.debsums.append("{} ({})".format(line, str(colorful.cyan(self.get_package_name(line).rstrip()))))
+        f = "debsums." + self.backend.host
+        if os.path.exists(f):
+            self.debsums.append("From local cache:")
+            with open(f) as f:
+                for line in f:
+                    self.debsums.append(line.strip())
+                return
+
+        with open(f, 'w') as f:
+            for line in self.backend.run_command('debsums -ac'):
+                l = "{} ({})".format(line, str(colorful.cyan(self.get_package_name(line).rstrip())))
+                self.debsums.append(l)
+                f.write(l + '\n')
 
     def get_processes(self):
         for pid, proc in self.backend.get_processes():
@@ -71,11 +88,12 @@ class Host:
         p = self.processes.get(pid)
         color = colorful.red if not p['pkg'] and not self._is_kthread(p) else colorful.green
         if p:
-            print("{:9}{:6}{:6} {:4} {:5}{:30} ".format((p['username'] or 'unk')[:8] + ('+' if len(p['username'] or 'unk') > 8 else ''),
-                                                        p['pid'], p['ppid'],
-                                                        str(colorful.yellow(int(len(p['connections'])))),
-                                                        str(color('dpkg:' if self.pkg and not self._is_kthread(p) else '')),
-                                                        p['pkg'] or ''), end='')
+            print("{:9}{:6}{:6} {:4} {:5}{:30} ".format(
+                (p['username'] or 'unk')[:8] + ('+' if len(p['username'] or 'unk') > 8 else ''),
+                p['pid'], p['ppid'],
+                str(colorful.yellow(int(len(p['connections'])))),
+                str(color('dpkg:' if self.pkg and not self._is_kthread(p) else '')),
+                p['pkg'] or ''), end='')
         else:
             print(pid, ">???")
 
@@ -84,8 +102,9 @@ class Host:
         if type(cmdline) == list:
             cmdline = ' '.join(p['cmdline'])
         print(cmdline[:50] if p['cmdline'] else p['name']
-              + '...' if len(cmdline) > 50 else '',
-              "(" + (colorful.white(p['exe']) if p['exe'] else colorful.white_on_red('missing')) + ")" if not self._is_kthread(p) else '',
+                                                + '...' if len(cmdline) > 50 else '',
+              "(" + (colorful.white(p['exe']) if p['exe'] else colorful.white_on_red(
+                  'missing')) + ")" if not self._is_kthread(p) else '',
               colorful.white_on_blue('(blueteam)') if self._is_parent(p['pid']) else '')
 
     def _is_parent(self, pid: int):
@@ -132,11 +151,18 @@ class Host:
                     rest = ':'.join(line.split(":")[2:])
                     self.users.append("{}:{}:{}".format(user, h, rest))
 
+    def get_packages(self):
+        for line in self.backend.run_command('dpkg -S \*'):
+            pkg = line.split(':')[0]
+            path = line.split(':')[-1].strip()
+            self.dpkg[path] = pkg
+
     def get_package_name(self, path: str):
         if path:
             try:
                 p = self.dpkg[path]
             except KeyError:
+                return
                 p = self.backend.run_command('dpkg -S {}'.format(path))
                 if p:
                     try:
@@ -144,7 +170,7 @@ class Host:
                     except AttributeError:
                         p = p[0].split(":")[0]
                     self.dpkg[path] = p
-                    return p
+            return p
 
     def run_all(self):
         for task in self._tasks:
@@ -164,3 +190,16 @@ class Host:
         if 0 in tree and 0 in tree[0]:
             tree[0].remove(0)
         self._print_tree(min(tree), tree)
+
+    def _check_dir(self, dir: str):
+        for root, subdirs, files in self.backend.walk(dir):
+            for file in files:
+                if root + "/" + file not in self.dpkg:
+                    self.files.add(root + "/" + file)
+            for subdir in subdirs:
+                self._check_dir(dir + "/" + subdir)
+
+    def file_sentry(self):
+        dirs = ('/etc',) #, '/usr', '/bin', '/sbin')
+        for d in dirs:
+            self._check_dir(d)

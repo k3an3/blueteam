@@ -1,3 +1,4 @@
+import os
 from abc import ABC, abstractmethod
 from concurrent.futures import as_completed
 from concurrent.futures.thread import ThreadPoolExecutor
@@ -27,11 +28,20 @@ class Backend(ABC):
     def get_processes(self):
         pass
 
+    @abstractmethod
+    def getpid(self):
+        pass
+
+    @abstractmethod
+    def walk(self):
+        pass
+
 
 class SSHBackend(Backend):
     def __init__(self, host: str, port: int = 22, user: str = 'root', password: str = None,
-                 keyfile: str = None):
+                 keyfile: str = None, sudo: str = None):
         self.host = host
+        self.sudo = sudo
         self.ssh = paramiko.SSHClient()
         self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         self.ssh.connect(host, port, user, password, key_filename=keyfile)
@@ -59,6 +69,9 @@ class SSHBackend(Backend):
             if int(line[2]) == int(id):
                 return line[0]
 
+    def getpid(self):
+        return int(self.remote_python('import os; print os.getppid()')[0])
+
     def remote_python(self, command: str):
         python_command = 'python -c "{}"'.format(command.replace('"', '\\"'))
         return self.run_command(python_command)
@@ -76,8 +89,17 @@ class SSHBackend(Backend):
     def read_file(self, path: str):
         return self.remote_python('print open("{}").read()'.format(path))
 
+    def walk(self, dir):
+        return (dir, self.run_command('find {} -type d -maxdepth 1'.format(dir)), self.run_command('find {} -type f -maxdepth 1'.format(dir)))
+
 
 class LocalBackend(Backend):
+    def __init__(self):
+        self.host = "localhost"
+
+    def getpid(self):
+        return os.getpid()
+
     def get_processes(self):
         for proc in psutil.process_iter(attrs=['pid', 'ppid', 'name', 'exe',
                                                'cmdline', 'terminal', 'connections',
@@ -100,8 +122,11 @@ class LocalBackend(Backend):
     def run_command(self, command: str):
         return run(command, shell=True, capture_output=True).stdout.decode().split('\n')
 
+    def walk(self, dir):
+        return os.walk(dir)
 
-class NullSSHBackend(SSHBackend):
+
+class NullSSHBackend(SSHBackend, ABC):
     def __init__(self, ssh):
         self.ssh = ssh
 

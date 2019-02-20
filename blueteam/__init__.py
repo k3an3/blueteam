@@ -1,4 +1,5 @@
 import argparse
+import getpass
 import os
 import re
 import subprocess
@@ -22,9 +23,9 @@ def get_version():
             return ''
 
 
-def handle_run(host: str, args):
+def handle_run(host: str, args, sudo=None):
     r = re.split(r'((\w+)@)?([.\w]+)(:(\d+))?', host)
-    b = SSHBackend(host=r[3], user=r[2], port=r[5] or 22, keyfile=args.keyfile)
+    b = SSHBackend(host=r[3], user=r[2], port=r[5] or 22, keyfile=args.keyfile, sudo=sudo)
     h = Host(b, cron=not args.no_cron, debsums=not args.skip_debsums, pkg=not args.no_pkg, kthreads=not args.no_kthread)
     if args.ps:
         h.get_processes()
@@ -55,6 +56,10 @@ def handle_results(host: Host):
     if host.processes:
         print(colorful.white_on_blue("PSTREE FOR " + str(host)))
         host.pstree()
+    if host.files:
+        print(colorful.white_on_blue("FILE SENTRY FOR " + str(host)))
+        for f in host.files:
+            print(f)
 
 
 def cli():
@@ -69,6 +74,7 @@ def cli():
     parser.add_argument('-k', '--no-kthread', dest='no_kthread', action='store_true', help="Don't print kthreads in "
                                                                                            "process list.")
     parser.add_argument('-p', '--ps', dest='ps', action='store_true', help='Only perform pstree.')
+    parser.add_argument('-s', '--sudo', dest='sudo', help='Prompt for sudo password.')
     parser.add_argument('-w', '--workers', default=cpu_count() + 1, type=int, dest='processes',
                         help='Number of processes to use for SSH hosts.')
     parser.add_argument('hosts', metavar='[user@]host[:port]', default=None, nargs='*', help='SSH hosts to run on.')
@@ -79,10 +85,13 @@ def cli():
 
     if args.hosts:
         hosts = []
+        sudo_pass = None
+        if args.sudo:
+            sudo_pass = getpass.getpass("[sudo] password:")
         with Pool(processes=args.processes) as pool:
             for host in args.hosts:
                 print(colorful.black_on_white("STARTING " + host))
-                p = pool.apply_async(handle_run, args=(host, args))
+                p = pool.apply_async(handle_run, args=(host, args, sudo_pass))
                 hosts.append(p)
             for r in hosts:
                 r.wait()
@@ -98,6 +107,7 @@ def cli():
             h.pstree()
         else:
             h.run_all()
+            handle_results(h)
     print(colorful.white_on_green("Done."))
 
 
