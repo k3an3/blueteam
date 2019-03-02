@@ -23,6 +23,9 @@ class Host:
         self.processes = {}
         self.dpkg = {}
         self.pid = self.backend.getpid()
+        self.uid = self.backend.getuid()
+        if not self.backend.sudo and self.uid:
+            self.backend.sudo = True
         self._tasks = [self.parse_sudo, self.get_login_users, self.get_processes]
         self.uidmap = {}
         if debsums:

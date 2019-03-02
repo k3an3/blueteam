@@ -87,7 +87,7 @@ def cli():
         hosts = []
         sudo_pass = None
         if args.sudo:
-            sudo_pass = getpass.getpass("[sudo] password:")
+            sudo_pass = getpass.getpass("[sudo] password for remote host:")
         with Pool(processes=args.processes) as pool:
             for host in args.hosts:
                 print(colorful.black_on_white("STARTING " + host))

@@ -33,6 +33,10 @@ class Backend(ABC):
         pass
 
     @abstractmethod
+    def getuid(self):
+        pass
+
+    @abstractmethod
     def walk(self):
         pass
 
@@ -55,7 +59,7 @@ class SSHBackend(Backend):
                     p = int(p)
                 except ValueError:
                     continue
-                results.append(executor.submit(_get_process, self.ssh, p))
+                results.append(executor.submit(self._get_process, p))
         for res in as_completed(results):
             try:
                 r = res.result()[1]
@@ -72,6 +76,9 @@ class SSHBackend(Backend):
     def getpid(self):
         return int(self.remote_python('import os; print os.getppid()')[0])
 
+    def getuid(self):
+        return int(self.remote_python('import os; print os.getuid()')[0])
+
     def remote_python(self, command: str):
         python_command = 'python -c "{}"'.format(command.replace('"', '\\"'))
         return self.run_command(python_command)
@@ -80,7 +87,22 @@ class SSHBackend(Backend):
         return self.run_command('ls {}'.format(glob))
 
     def run_command(self, command: str):
-        _, stdout, _ = self.ssh.exec_command(command)
+        if self.sudo:
+            if type(self.sudo) is bool:
+                _, stdout, _ = self.ssh.exec_command("sudo " + command)
+            else:
+                session = self.ssh.get_transport().open_session()
+                session.set_combine_stderr(True)
+                session.get_pty()
+                session.exec_command("sudo -k " + command)
+                stdin = session.makefile('wb', -1)
+                stdout = session.makefile('rb', -1)
+                stdin.write(self.sudo + '\n')
+                stdin.flush()
+                if session.recv_exit_status():
+                    raise Exception("{}: Unable to sudo with supplied password.".format(host))
+        else:
+            _, stdout, _ = self.ssh.exec_command(command)
         res = []
         for line in stdout.readlines():
             res.append(line.rstrip())
@@ -90,7 +112,27 @@ class SSHBackend(Backend):
         return self.remote_python('print open("{}").read()'.format(path))
 
     def walk(self, dir):
-        return (dir, self.run_command('find {} -type d -maxdepth 1'.format(dir)), self.run_command('find {} -type f -maxdepth 1'.format(dir)))
+        return dir, self.run_command('find {} -type d -maxdepth 1'.format(dir)), self.run_command('find {} -type f -maxdepth 1'.format(dir))
+
+    def _get_process(self, p: int):
+        try:
+            stat = self.read_file('/proc/{}/stat'.format(p))[0]
+        except IndexError:
+            return
+        try:
+            exe = self.run_command('readlink /proc/{}/exe'.format(p))[0].rstrip()
+        except IndexError:
+            exe = ''
+        name = stat.split('(')[1].split(')')[0]
+        ppid = int(stat.split(')')[1].split()[1])
+        cmdline = self.read_file('/proc/{}/cmdline'.format(p))[0].replace('\x00', ' ')
+        data = {'pid': p, 'name': name, 'ppid': ppid,
+                'exe': exe,
+                'cmdline': cmdline,
+                'connections': '',
+                'username': self.user_from_id(
+                    self.run_command('grep Uid /proc/{}/status'.format(p))[0].split()[1])}
+        return p, data
 
 
 class LocalBackend(Backend):
@@ -99,6 +141,9 @@ class LocalBackend(Backend):
 
     def getpid(self):
         return os.getpid()
+
+    def getuid(self):
+        return os.getuid()
 
     def get_processes(self):
         for proc in psutil.process_iter(attrs=['pid', 'ppid', 'name', 'exe',
@@ -131,23 +176,3 @@ class NullSSHBackend(SSHBackend, ABC):
         self.ssh = ssh
 
 
-def _get_process(ssh, p: int):
-    backend = NullSSHBackend(ssh)
-    try:
-        stat = backend.read_file('/proc/{}/stat'.format(p))[0]
-    except IndexError:
-        return
-    try:
-        exe = backend.run_command('readlink /proc/{}/exe'.format(p))[0].rstrip()
-    except IndexError:
-        exe = ''
-    name = stat.split('(')[1].split(')')[0]
-    ppid = int(stat.split(')')[1].split()[1])
-    cmdline = backend.read_file('/proc/{}/cmdline'.format(p))[0].replace('\x00', ' ')
-    data = {'pid': p, 'name': name, 'ppid': ppid,
-            'exe': exe,
-            'cmdline': cmdline,
-            'connections': '',
-            'username': backend.user_from_id(
-                backend.run_command('grep Uid /proc/{}/status'.format(p))[0].split()[1])}
-    return p, data
