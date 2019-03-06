@@ -1,4 +1,6 @@
+import ast
 import os
+import socket
 from abc import ABC, abstractmethod
 from concurrent.futures import as_completed
 from concurrent.futures.thread import ThreadPoolExecutor
@@ -29,6 +31,10 @@ class Backend(ABC):
         pass
 
     @abstractmethod
+    def get_connections(self):
+        pass
+
+    @abstractmethod
     def getpid(self):
         pass
 
@@ -38,6 +44,10 @@ class Backend(ABC):
 
     @abstractmethod
     def walk(self):
+        pass
+
+    @abstractmethod
+    def real_path(self):
         pass
 
 
@@ -50,10 +60,16 @@ class SSHBackend(Backend):
         self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         self.ssh.connect(host, port, user, password, key_filename=keyfile)
 
+    def get_connections(self):
+        pass
+
+    def real_path(self, path: str):
+        return self.remote_python('import os; print os.path.realpath("{}")'.format(path))[0]
+
     def get_processes(self):
         results = []
         with ThreadPoolExecutor(max_workers=cpu_count() + 1) as executor:
-            for p in self.glob('/proc/'):
+            for p in self.glob('/proc/*'):
                 p = p.split('/')[-1]
                 try:
                     p = int(p)
@@ -83,26 +99,19 @@ class SSHBackend(Backend):
         python_command = 'python -c "{}"'.format(command.replace('"', '\\"'))
         return self.run_command(python_command)
 
-    def glob(self, glob: str):
-        return self.run_command('ls {}'.format(glob))
+    def glob(self, path: str):
+        result = []
+        for p in braceexpand(path):
+            result += self.remote_python('from glob import glob\nfor line in glob("{}"): print line'.format(p))
+        return result
 
     def run_command(self, command: str):
         if self.sudo:
-            if type(self.sudo) is bool:
-                _, stdout, _ = self.ssh.exec_command("sudo " + command)
-            else:
-                session = self.ssh.get_transport().open_session()
-                session.set_combine_stderr(True)
-                session.get_pty()
-                session.exec_command("sudo -k " + command)
-                stdin = session.makefile('wb', -1)
-                stdout = session.makefile('rb', -1)
-                stdin.write(self.sudo + '\n')
-                stdin.flush()
-                if session.recv_exit_status():
-                    raise Exception("{}: Unable to sudo with supplied password.".format(host))
-        else:
-            _, stdout, _ = self.ssh.exec_command(command)
+            command = "sudo -S -p '' " + command
+        stdin, stdout, stderr = self.ssh.exec_command(command)
+        if self.sudo and not isinstance(self.sudo, bool):
+            stdin.write(self.sudo + "\n")
+            stdin.flush()
         res = []
         for line in stdout.readlines():
             res.append(line.rstrip())
@@ -112,7 +121,7 @@ class SSHBackend(Backend):
         return self.remote_python('print open("{}").read()'.format(path))
 
     def walk(self, dir):
-        return dir, self.run_command('find {} -type d -maxdepth 1'.format(dir)), self.run_command('find {} -type f -maxdepth 1'.format(dir))
+        return ast.literal_eval(self.remote_python('import os; print list(os.walk("{}"))'.format(dir))[0])
 
     def _get_process(self, p: int):
         try:
@@ -138,6 +147,7 @@ class SSHBackend(Backend):
 class LocalBackend(Backend):
     def __init__(self):
         self.host = "localhost"
+        self.sudo = False
 
     def getpid(self):
         return os.getpid()
@@ -145,11 +155,45 @@ class LocalBackend(Backend):
     def getuid(self):
         return os.getuid()
 
-    def get_processes(self):
+    @staticmethod
+    def get_processes():
         for proc in psutil.process_iter(attrs=['pid', 'ppid', 'name', 'exe',
                                                'cmdline', 'terminal', 'connections',
                                                'username', 'create_time']):
             yield proc.pid, proc.info
+
+    def real_path(self, path: str):
+        return os.path.realpath(path)
+
+    # https://github.com/giampaolo/psutil/blob/master/scripts/netstat.py
+    def get_connections(self):
+        res = []
+        AD = "-"
+        AF_INET6 = getattr(socket, 'AF_INET6', object())
+        proto_map = {
+            (socket.AF_INET, socket.SOCK_STREAM): 'tcp',
+            (AF_INET6, socket.SOCK_STREAM): 'tcp6',
+            (socket.AF_INET, socket.SOCK_DGRAM): 'udp',
+            (AF_INET6, socket.SOCK_DGRAM): 'udp6',
+        }
+        templ = "%-5s %-50s %-50s %-13s %-6s %s"
+        proc_names = {}
+        for p in psutil.process_iter(attrs=['pid', 'name']):
+            proc_names[p.info['pid']] = p.info['name']
+        for c in psutil.net_connections(kind='inet'):
+            laddr = "%s:%s" % c.laddr
+            raddr = ""
+            if c.raddr:
+                raddr = "%s:%s" % c.raddr
+            res.append(templ % (
+                proto_map[(c.family, c.type)],
+                laddr,
+                raddr or AD,
+                c.status,
+                c.pid or AD,
+                proc_names.get(c.pid, '?')[:15],
+            ))
+        return res
 
     def read_file(self, path: str):
         result = []
@@ -169,10 +213,3 @@ class LocalBackend(Backend):
 
     def walk(self, dir):
         return os.walk(dir)
-
-
-class NullSSHBackend(SSHBackend, ABC):
-    def __init__(self, ssh):
-        self.ssh = ssh
-
-

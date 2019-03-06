@@ -12,7 +12,7 @@ from blueteam.backends import Backend
 
 class Host:
     def __init__(self, backend: Backend, cron: bool = True, debsums: bool = True, pkg: bool = True,
-                 kthreads: bool = True,
+                 kthreads: bool = True, file_sentry: bool = False,
                  q: Queue = None):
         self.backend = backend
         self.sudo = []
@@ -21,19 +21,23 @@ class Host:
         self.debsums = []
         self.users = []
         self.processes = {}
+        self.connections = []
         self.dpkg = {}
         self.pid = self.backend.getpid()
         self.uid = self.backend.getuid()
         if not self.backend.sudo and self.uid:
             self.backend.sudo = True
-        self._tasks = [self.parse_sudo, self.get_login_users, self.get_processes]
+        self._tasks = [self.parse_sudo, self.get_login_users, self.get_processes,
+                       self.get_connections]
         self.uidmap = {}
         if debsums:
             self._tasks.append(self.run_debsums)
-        if cron:
-            self._tasks.append(self.parse_cron)
         if pkg:
             self._tasks.insert(0, self.get_packages)
+        if cron:
+            self._tasks.append(self.parse_cron)
+        if file_sentry:
+            self._tasks.append(self.file_sentry)
         self.q = q
         self.pkg = pkg
         self.kthreads = kthreads
@@ -49,6 +53,9 @@ class Host:
                     if line and not line.startswith('#'):
                         yield line
 
+    def _get_login_shells(self):
+        return self.backend.read_file('/etc/shells')
+
     def parse_sudo(self):
         for line in self.combine_files('/etc/sudoers{,.d/*}'):
             if line.startswith("Defaults"):
@@ -58,9 +65,18 @@ class Host:
 
     def parse_cron(self):
         for f in self.backend.glob('/etc/cron{tab,.*/*}') + self.backend.glob('/var/spool/cron/crontabs/*'):
-            if self.debsums and f in self.debsums or not self.debsums:
+            modified = self.debsums and f in [d.split()[0] for d in self.debsums]
+            new = self.dpkg and f not in self.dpkg
+            if modified or new:
+                color = colorful.orange if modified else colorful.yellow
+                self.cron.append(str(color("{} {} ({}) {}".format(
+                    '=' * 10,
+                    f,
+                    'modified' if modified else 'new',
+                    '=' * 10))))
                 for line in self.backend.read_file(f):
-                    self.cron.append(line)
+                    if line and not line.startswith('#'):
+                        self.cron.append(line)
 
     def run_debsums(self):
         f = "debsums." + self.backend.host
@@ -73,9 +89,13 @@ class Host:
 
         with open(f, 'w') as f:
             for line in self.backend.run_command('debsums -ac'):
-                l = "{} ({})".format(line, str(colorful.cyan(self.get_package_name(line).rstrip())))
-                self.debsums.append(l)
-                f.write(l + '\n')
+                if line:
+                    l = "{} ({})".format(line, str(colorful.cyan(self.get_package_name(line).rstrip())))
+                    self.debsums.append(l)
+                    f.write(l + '\n')
+
+    def get_connections(self):
+        self.connections = self.backend.get_connections()
 
     def get_processes(self):
         for pid, proc in self.backend.get_processes():
@@ -194,15 +214,17 @@ class Host:
             tree[0].remove(0)
         self._print_tree(min(tree), tree)
 
-    def _check_dir(self, dir: str):
-        for root, subdirs, files in self.backend.walk(dir):
+    def _check_dir(self, dirname: str):
+        for root, subdirs, files in self.backend.walk(dirname):
             for file in files:
-                if root + "/" + file not in self.dpkg:
+                path = root + "/" + file
+                if self.backend.real_path(path) not in self.dpkg:
                     self.files.add(root + "/" + file)
             for subdir in subdirs:
-                self._check_dir(dir + "/" + subdir)
+                self._check_dir(dirname + "/" + subdir)
 
     def file_sentry(self):
-        dirs = ('/etc',) #, '/usr', '/bin', '/sbin')
-        for d in dirs:
-            self._check_dir(d)
+        dirs = ('/etc', '/*bin', '/usr/local/*bin')
+        for dr in dirs:
+            for d in self.backend.glob(dr):
+                self._check_dir(d)

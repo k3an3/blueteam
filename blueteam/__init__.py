@@ -26,7 +26,9 @@ def get_version():
 def handle_run(host: str, args, sudo=None):
     r = re.split(r'((\w+)@)?([.\w]+)(:(\d+))?', host)
     b = SSHBackend(host=r[3], user=r[2], port=r[5] or 22, keyfile=args.keyfile, sudo=sudo)
-    h = Host(b, cron=not args.no_cron, debsums=not args.skip_debsums, pkg=not args.no_pkg, kthreads=not args.no_kthread)
+    h = Host(b, cron=not args.no_cron, debsums=not args.skip_debsums,
+             pkg=not args.no_pkg, kthreads=not args.no_kthread,
+             file_sentry=args.file_sentry)
     if args.ps:
         h.get_processes()
     else:
@@ -56,9 +58,21 @@ def handle_results(host: Host):
     if host.processes:
         print(colorful.white_on_blue("PSTREE FOR " + str(host)))
         host.pstree()
+    if host.connections:
+        print(colorful.white_on_blue("NETWORK FOR " + str(host)))
+        templ = "%-5s %-50s %-50s %-13s %-6s %s"
+        print(templ % (
+            "Proto", "Local address", "Remote address", "Status", "PID",
+            "Program name"))
+        for line in sorted(host.connections):
+            if '127.0.0.1' in line or '::1:' in line:
+                line = colorful.green(line)
+            elif '0.0.0.0' in line or ':::' in line:
+                line = colorful.yellow(line)
+            print(line)
     if host.files:
         print(colorful.white_on_blue("FILE SENTRY FOR " + str(host)))
-        for f in host.files:
+        for f in sorted(host.files):
             print(f)
 
 
@@ -79,6 +93,7 @@ def cli():
                         help='Number of processes to use for SSH hosts.')
     parser.add_argument('hosts', metavar='[user@]host[:port]', default=None, nargs='*', help='SSH hosts to run on.')
     parser.add_argument('-i', '--identity', dest='keyfile', help='SSH identity file to use.')
+    parser.add_argument('-f', '--file-sentry', dest='file_sentry', action='store_true', help='Run the file sentry.')
     args = parser.parse_args()
 
     print(colorful.white_on_blue("blueteam " + get_version()))
@@ -101,7 +116,9 @@ def cli():
             print(colorful.white_on_red("Must be run as root to do local. Exiting..."))
             raise SystemExit
         b = LocalBackend()
-        h = Host(b, debsums=not args.skip_debsums, pkg=not args.no_pkg)
+        h = Host(b, cron=not args.no_cron, debsums=not args.skip_debsums,
+                 pkg=not args.no_pkg, kthreads=not args.no_kthread,
+                 file_sentry=args.file_sentry)
         if args.ps:
             h.get_processes()
             h.pstree()
