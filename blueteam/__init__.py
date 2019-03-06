@@ -74,7 +74,7 @@ def cli():
     parser.add_argument('-k', '--no-kthread', dest='no_kthread', action='store_true', help="Don't print kthreads in "
                                                                                            "process list.")
     parser.add_argument('-p', '--ps', dest='ps', action='store_true', help='Only perform pstree.')
-    parser.add_argument('-s', '--sudo', dest='sudo', help='Prompt for sudo password.')
+    parser.add_argument('-s', '--sudo', dest='sudo', action='store_true', help='Prompt for sudo password.')
     parser.add_argument('-w', '--workers', default=cpu_count() + 1, type=int, dest='processes',
                         help='Number of processes to use for SSH hosts.')
     parser.add_argument('hosts', metavar='[user@]host[:port]', default=None, nargs='*', help='SSH hosts to run on.')
