@@ -79,7 +79,7 @@ class Host:
                         self.cron.append(line)
 
     def run_debsums(self):
-        f = "debsums." + self.backend.host
+        f = os.path.join("/tmp", ".debsums." + self.backend.host)
         if os.path.exists(f):
             self.debsums.append("From local cache:")
             with open(f) as f:
