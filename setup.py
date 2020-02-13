@@ -12,7 +12,7 @@ setup(
     install_requires=[
         'braceexpand',
         'colorful',
-        'fabric',
+        'paramiko',
         'psutil'
     ],
     entry_points={
