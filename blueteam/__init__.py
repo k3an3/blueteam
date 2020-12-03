@@ -3,6 +3,7 @@ import getpass
 import os
 import re
 import subprocess
+import sys
 from multiprocessing import cpu_count, Pool
 
 import colorful
@@ -23,9 +24,9 @@ def get_version():
             return ''
 
 
-def handle_run(host: str, args, sudo=None):
+def handle_run(host: str, args, sudo=None, key_pass=None):
     r = re.split(r'((\w+)@)?([.\w]+)(:(\d+))?', host)
-    b = SSHBackend(host=r[3], user=r[2], port=r[5] or 22, keyfile=args.keyfile, sudo=sudo)
+    b = SSHBackend(host=r[3], user=r[2], port=r[5] or 22, keyfile=args.keyfile, sudo=sudo, passphrase=key_pass)
     h = Host(b, cron=not args.no_cron, debsums=not args.skip_debsums,
              pkg=not args.no_pkg, kthreads=not args.no_kthread,
              file_sentry=args.file_sentry)
@@ -78,22 +79,23 @@ def handle_results(host: Host):
 
 def cli():
     parser = argparse.ArgumentParser(description='Scan machine for threats.')
-    parser.add_argument('-d', '--skip-debsums', dest='skip_debsums', action='store_true', help="Don't run debsums. "
-                                                                                               "Helpful if debsums not "
-                                                                                               "installed or takes "
-                                                                                               "too long.")
-    parser.add_argument('-n', '--no-cron', dest='no_cron', action='store_true', help="Don't print cron.")
-    parser.add_argument('-c', '--no-pkg', dest='no_pkg', action='store_true', help="Don't match processes to "
-                                                                                   "packages. Quicker.")
-    parser.add_argument('-k', '--no-kthread', dest='no_kthread', action='store_true', help="Don't print kthreads in "
-                                                                                           "process list.")
-    parser.add_argument('-p', '--ps', dest='ps', action='store_true', help='Only perform pstree.')
-    parser.add_argument('-s', '--sudo', dest='sudo', action='store_true', help='Prompt for sudo password.')
+    parser.add_argument('-d', '--skip-debsums', action='store_true', help="Don't run debsums. "
+                                                                          "Helpful if debsums not "
+                                                                          "installed or takes "
+                                                                          "too long.")
+    parser.add_argument('-n', '--no-cron', action='store_true', help="Don't print cron.")
+    parser.add_argument('-c', '--no-pkg', action='store_true', help="Don't match processes to "
+                                                                    "packages. Quicker.")
+    parser.add_argument('-k', '--no-kthread', action='store_true', help="Don't print kthreads in "
+                                                                        "process list.")
+    parser.add_argument('-p', '--ps', action='store_true', help='Only perform pstree.')
+    parser.add_argument('-a', '--passphrase', action='store_true', help='Prompt for SSH key passphrase.')
+    parser.add_argument('-s', '--sudo', action='store_true', help='Prompt for sudo password.')
     parser.add_argument('-w', '--workers', default=cpu_count() + 1, type=int, dest='processes',
                         help='Number of processes to use for SSH hosts.')
-    parser.add_argument('hosts', metavar='[user@]host[:port]', default=None, nargs='*', help='SSH hosts to run on.')
+    parser.add_argument('hosts', metavar='[user@]host[:port]', nargs='*', help='SSH hosts to run on.')
     parser.add_argument('-i', '--identity', dest='keyfile', help='SSH identity file to use.')
-    parser.add_argument('-f', '--file-sentry', dest='file_sentry', action='store_true', help='Run the file sentry.')
+    parser.add_argument('-f', '--file-sentry', action='store_true', help='Run the file sentry.')
     args = parser.parse_args()
 
     print(colorful.white_on_blue("blueteam " + get_version()))
@@ -101,12 +103,18 @@ def cli():
     if args.hosts:
         hosts = []
         sudo_pass = None
+        key_pass = None
+        if args.passphrase:
+            if not args.keyfile:
+                print("Must specify a keyfile!")
+                sys.exit(0)
+            key_pass = getpass.getpass("Passphrase for SSH keyfile:")
         if args.sudo:
             sudo_pass = getpass.getpass("[sudo] password for remote host:")
         with Pool(processes=args.processes) as pool:
             for host in args.hosts:
                 print(colorful.black_on_white("STARTING " + host))
-                p = pool.apply_async(handle_run, args=(host, args, sudo_pass))
+                p = pool.apply_async(handle_run, args=(host, args, sudo_pass, key_pass))
                 hosts.append(p)
             for r in hosts:
                 r.wait()
@@ -114,7 +122,7 @@ def cli():
     else:
         if os.getuid():
             print(colorful.white_on_red("Must be run as root to do local. Exiting..."))
-            raise SystemExit
+            sys.exit(0)
         b = LocalBackend()
         h = Host(b, cron=not args.no_cron, debsums=not args.skip_debsums,
                  pkg=not args.no_pkg, kthreads=not args.no_kthread,

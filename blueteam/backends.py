@@ -1,6 +1,7 @@
 import ast
 import os
 import socket
+import sys
 from abc import ABC, abstractmethod
 from glob import glob
 from subprocess import run
@@ -50,12 +51,19 @@ class Backend(ABC):
 
 class SSHBackend(Backend):
     def __init__(self, host: str, port: int = 22, user: str = 'root', password: str = None,
-                 keyfile: str = None, sudo: str = None):
+                 keyfile: str = None, sudo: str = None, passphrase: str = None):
         self.host = host
         self.sudo = sudo
         self.ssh = paramiko.SSHClient()
         self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        self.ssh.connect(host, port, user, password, key_filename=keyfile)
+        if passphrase:
+            self.ssh.connect(host, port, user, password, key_filename=keyfile, passphrase=passphrase)
+        else:
+            try:
+                self.ssh.connect(host, port, user, password, key_filename=keyfile)
+            except paramiko.ssh_exception.PasswordRequiredException:
+                print("SSH key is encrypted! Re-run with --passphrase or -a.")
+                sys.exit(0)
         self.uid_name_map = {}
         self.uid_pid_map = {}
 
